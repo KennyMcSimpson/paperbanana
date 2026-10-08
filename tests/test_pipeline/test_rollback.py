@@ -15,7 +15,7 @@ from PIL import Image
 from paperbanana.core import pipeline as pipeline_mod
 from paperbanana.core.config import Settings
 from paperbanana.core.pipeline import PaperBananaPipeline
-from paperbanana.core.resume import ResumeState
+from paperbanana.core.resume import ResumeState, load_resume_state
 from paperbanana.core.types import (
     DiagramType,
     GenerationInput,
@@ -150,6 +150,41 @@ async def test_visualizer_failure_round2_rolls_back_to_previous_image(tmp_path):
     # Metadata on disk matches
     metadata = json.loads((run_dir / "metadata.json").read_text())
     assert metadata["rollback"]["rollback_occurred"] is True
+
+
+@pytest.mark.asyncio
+async def test_rolled_back_run_can_resume_from_disk_and_complete(tmp_path):
+    settings = _make_settings(tmp_path, save_iterations=True)
+    pipeline = PaperBananaPipeline(
+        settings=settings,
+        vlm_client=_MockVLM(["Plan description", "Styled description", _REVISION_CRITIQUE]),
+        image_gen_fn=_MockImageGen(),
+    )
+    _fail_visualizer_at(pipeline, fail_iteration=2)
+    await pipeline.generate(_default_input())
+
+    run_dir = Path(settings.output_dir) / pipeline.run_id
+    checkpoint = (run_dir / "iter_1" / "details.json").read_bytes()
+    failure_note = (run_dir / "iter_2" / "failure.json").read_bytes()
+    state = load_resume_state(settings.output_dir, pipeline.run_id)
+    assert state.last_iteration == 1
+    assert state.last_description == "Revised description"
+    assert Path(state.last_image_path).exists()
+
+    continued = PaperBananaPipeline(
+        settings=settings,
+        vlm_client=_MockVLM([_ACCEPT_CRITIQUE]),
+        image_gen_fn=_MockImageGen(),
+    )
+    result = await continued.continue_run(state, additional_iterations=1)
+
+    assert [iteration.iteration for iteration in result.iterations] == [2]
+    assert Path(result.image_path).exists()
+    assert (run_dir / "iter_1" / "details.json").read_bytes() == checkpoint
+    assert (run_dir / "iter_2" / "failure.json").read_bytes() == failure_note
+    resumed = load_resume_state(settings.output_dir, pipeline.run_id)
+    assert resumed.last_iteration == 2
+    assert Path(resumed.last_image_path).exists()
 
 
 # ── Test: round-1 visualizer failure still raises ────────────────

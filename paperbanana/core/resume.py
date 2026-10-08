@@ -86,9 +86,13 @@ def load_resume_state(output_dir: str, run_id: str) -> ResumeState:
     with open(input_path, encoding="utf-8") as f:
         run_input = json.load(f)
 
-    # Find the latest iteration
+    # Find the latest completed iteration
     iter_dirs = sorted(
-        [d for d in run_dir.iterdir() if d.is_dir() and d.name.startswith("iter_")],
+        [
+            d
+            for d in run_dir.iterdir()
+            if d.is_dir() and d.name.startswith("iter_") and (d / "details.json").is_file()
+        ],
         key=lambda d: int(d.name.split("_")[1]),
     )
 
